@@ -4,6 +4,7 @@ import os
 from datetime import datetime
 from typing import Optional, Dict
 from botocore.exceptions import ClientError
+from boto3.dynamodb.conditions import Key
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -129,7 +130,6 @@ class DynamoService:
         """List all items in a folder using GSI"""
         try:
             response = self.table.query(
-                IndexName='GSI1',
                 KeyConditionExpression='ParentId = :parent_id',
                 ExpressionAttributeValues={':parent_id': parent_id}
             )
@@ -158,6 +158,71 @@ class DynamoService:
         except ClientError as e:
             print(f"Error deleting item: {e}")
             return False
+
+    def delete_all_in_path(self, user_id: str, path: str) -> Dict:
+        """
+        Delete all items matching a specific UserId and Path prefix using GSIPATH index.
+        Uses batch deletion for efficiency (25 items per request).
+
+        Args:
+            user_id: User ID
+            path: Path prefix to query and delete (uses begins_with)
+
+        Returns:
+            Dictionary with deletion results
+        """
+        try:
+            # Step 1: Query all items with the given UserId and Path prefix
+            items_to_delete = []
+            response = self.table.query(
+                IndexName='GSIPATH',
+                KeyConditionExpression=Key('UserId').eq(user_id) & Key('Path').begins_with(path)
+            )
+            items_to_delete.extend(response.get('Items', []))
+
+            # Handle pagination
+            while 'LastEvaluatedKey' in response:
+                response = self.table.query(
+                    IndexName='GSIPATH',
+                    KeyConditionExpression=Key('UserId').eq(user_id) & Key('Path').begins_with(path),
+                    ExclusiveStartKey=response['LastEvaluatedKey']
+                )
+                items_to_delete.extend(response.get('Items', []))
+
+            # Step 2: Batch delete (25 items at a time)
+            deleted_count = 0
+            failed_count = 0
+
+            for i in range(0, len(items_to_delete), 25):
+                batch = items_to_delete[i:i+25]
+
+                try:
+                    with self.table.batch_writer() as writer:
+                        for item in batch:
+                            writer.delete_item(
+                                Key={'PK': item['PK'], 'SK': item['SK']}
+                            )
+                            deleted_count += 1
+                except ClientError as e:
+                    print(f"Error in batch delete: {e}")
+                    failed_count += len(batch)
+
+            return {
+                'success': True,
+                'deleted_count': deleted_count,
+                'failed_count': failed_count,
+                'total_found': len(items_to_delete)
+            }
+
+        except ClientError as e:
+            print(f"Error querying items by path: {e}")
+            return {
+                'success': False,
+                'deleted_count': 0,
+                'failed_count': 0,
+                'total_found': 0,
+                'error': str(e)
+            }
 
     def initialize_user_root(self, user_id: str) -> Dict:
         """

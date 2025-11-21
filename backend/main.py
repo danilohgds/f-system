@@ -1,7 +1,7 @@
 from fastapi import FastAPI, status, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from typing import Optional, List, Any, Dict
+from typing import Optional, List, Any
 import uvicorn
 import uuid
 import traceback
@@ -54,6 +54,11 @@ class FileSystemItemResponse(BaseModel):
     UserId: str
 
 
+class DeleteByPathRequest(BaseModel):
+    UserId: str
+    Path: str
+
+
 @app.get("/")
 def read_root():
     return {
@@ -61,9 +66,10 @@ def read_root():
         "version": "1.0.0",
         "endpoints": {
             "POST /users/{user_id}": "Initialize filesystem for a user",
-            "GET /folder/{folder_id}": "List contents of a folder",
-            "POST /folders/{folder_id}": "Create a new item in a folder",
-            "DELETE /item/{item_id}": "Delete an item by ID"
+            "GET /folders/{folder_id}": "List contents of a folder",
+            "POST /folders": "Create a new item in a folder",
+            "DELETE /item/{item_id}": "Delete an item by ID",
+            "DELETE /path": "Delete all items matching a path (requires UserId and Path in request body)"
         }
     }
 
@@ -87,7 +93,7 @@ def initialize_user_filesystem(user_id: str):
     )
 
 
-@app.get("/folder/{folder_id}", response_model=List[FileSystemItemResponse])
+@app.get("/folders/{folder_id}", response_model=List[FileSystemItemResponse])
 def get_folder_contents(folder_id: str):
     """
     List all contents of a folder.
@@ -182,6 +188,36 @@ def delete_item(item_id: str, user_id: str):
             "message": "Item deleted successfully",
             "item_id": item_id
         }
+    )
+
+
+@app.delete("/path")
+def delete_items_by_path(delete_request: DeleteByPathRequest):
+    """
+    Delete all items matching a specific UserId and Path.
+
+    Uses the GSIPATH index to efficiently query and delete all matching items.
+
+    Args:
+        delete_request: Request body containing UserId and Path
+
+    Returns:
+        Dictionary containing deletion results including counts of deleted and failed items
+    """
+    result = dynamo_service.delete_all_in_path(
+        delete_request.UserId, 
+        delete_request.Path
+    )
+
+    if not result.get('success', False):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete items: {result.get('error', 'Unknown error')}"
+        )
+
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content=convert_decimals(result)
     )
 
 
