@@ -69,7 +69,7 @@ def read_root():
             "GET /folders/{folder_id}": "List contents of a folder",
             "POST /folders": "Create a new item in a folder",
             "DELETE /item/{item_id}": "Delete an item by ID",
-            "DELETE /path": "Delete all items matching a path (requires UserId and Path in request body)"
+            "DELETE /folders": "Delete all items matching a path (requires UserId and Path in request body)"
         }
     }
 
@@ -191,7 +191,7 @@ def delete_item(item_id: str, user_id: str):
     )
 
 
-@app.delete("/path")
+@app.delete("/folders")
 def delete_items_by_path(delete_request: DeleteByPathRequest):
     """
     Delete all items matching a specific UserId and Path.

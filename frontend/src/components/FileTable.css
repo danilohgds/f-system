@@ -52,3 +52,38 @@
   font-style: italic;
   padding: 30px !important;
 }
+
+/* Folder row styling */
+.folder-row {
+  cursor: pointer;
+}
+
+.folder-row:hover {
+  background-color: #e8f5e9 !important;
+}
+
+.folder-name {
+  color: #1976d2;
+  font-weight: 500;
+}
+
+.folder-row:hover .folder-name {
+  color: #0d47a1;
+  text-decoration: underline;
+}
+
+/* File row styling */
+.file-row {
+  cursor: default;
+}
+
+/* Type cell styling */
+.type-cell {
+  width: 60px;
+  text-align: center;
+  font-size: 24px;
+}
+
+.name-cell {
+  font-size: 16px;
+}

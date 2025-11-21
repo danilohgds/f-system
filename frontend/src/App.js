@@ -6,10 +6,18 @@ import './App.css';
 
 function App() {
   const [fileList, setFileList] = useState([]);
-  const [currentFolder, setCurrentFolder] = useState(null);
+  const [currentFolderId, setCurrentFolderId] = useState(null);
+  const [currentFolderName, setCurrentFolderName] = useState('ROOT');
+  const [navigationStack, setNavigationStack] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [successMessage, setSuccessMessage] = useState(null);
+
+  // Root folder ID - TODO: Get from user auth
+  const ROOT_FOLDER_ID = '9e105426-d861-4b5b-9f0d-ae5f30c41f33';
+
+  // Hardcoded User ID - TODO: Get from user auth
+  const USER_ID = 'userDanilo';
 
   useEffect(() => {
     const loadInitialFolder = async () => {
@@ -17,8 +25,7 @@ function App() {
         setLoading(true);
         setError(null);
 
-        // TODO: REAL ROOT FOLDER ID HASHED WITH USER ID FROM AUTH - didnt do this because not in scope
-        const folderId = currentFolder || 'dfff71f9e6fd2cba4054b5f35683eafd8a03fbea6a7d01ec58bebf31fc05b9ed';
+        const folderId = currentFolderId || ROOT_FOLDER_ID;
         const contents = await fetchFolderContents(folderId);
 
         setFileList(contents);
@@ -31,18 +38,50 @@ function App() {
     };
 
     loadInitialFolder();
-  }, [currentFolder]);
+  }, [currentFolderId]);
 
-  const handleCreateFolder = async (folderData) => {
+  const handleFolderClick = (folderId, folderName) => {
+    // Add current folder to navigation stack
+    setNavigationStack([...navigationStack, { id: currentFolderId || ROOT_FOLDER_ID, name: currentFolderName }]);
+
+    // Navigate to the clicked folder
+    setCurrentFolderId(folderId);
+    setCurrentFolderName(folderName);
+  };
+
+  const handleGoBack = () => {
+    if (navigationStack.length > 0) {
+      // Pop the last folder from the stack
+      const previousFolder = navigationStack[navigationStack.length - 1];
+      const newStack = navigationStack.slice(0, -1);
+
+      setNavigationStack(newStack);
+      setCurrentFolderId(previousFolder.id);
+      setCurrentFolderName(previousFolder.name);
+    }
+  };
+
+  const handleGoToRoot = () => {
+    setNavigationStack([]);
+    setCurrentFolderId(null);
+    setCurrentFolderName('ROOT');
+  };
+
+  const handleCreateFolder = async (folderName) => {
     try {
       setError(null);
       setSuccessMessage(null);
 
-      await createFolder(folderData);
+      // Get current folder ID (use ROOT if not set)
+      const parentId = currentFolderId || ROOT_FOLDER_ID;
+
+      // Call API to create folder
+      await createFolder(parentId, folderName, USER_ID);
+
       setSuccessMessage('Folder created successfully!');
 
-      const folderId = currentFolder || 'dfff71f9e6fd2cba4054b5f35683eafd8a03fbea6a7d01ec58bebf31fc05b9ed';
-      const contents = await fetchFolderContents(folderId);
+      // Refresh current folder contents
+      const contents = await fetchFolderContents(parentId);
       setFileList(contents);
 
       setTimeout(() => setSuccessMessage(null), 3000);
@@ -73,13 +112,45 @@ function App() {
 
         {!loading && !error && (
           <>
+            <div className="navigation-bar">
+              <button
+                className="nav-button"
+                onClick={handleGoToRoot}
+                disabled={navigationStack.length === 0}
+              >
+                🏠 Home
+              </button>
+              <button
+                className="nav-button"
+                onClick={handleGoBack}
+                disabled={navigationStack.length === 0}
+              >
+                ⬅️ Back
+              </button>
+              <span className="breadcrumb">
+                {navigationStack.length > 0 && (
+                  <>
+                    {navigationStack.map((folder, index) => (
+                      <span key={index}>
+                        <span className="breadcrumb-separator">/</span>
+                        <span className="breadcrumb-item">{folder.name}</span>
+                      </span>
+                    ))}
+                    <span className="breadcrumb-separator">/</span>
+                  </>
+                )}
+                <span className="breadcrumb-current">{currentFolderName}</span>
+              </span>
+            </div>
+
             <CreateFolderForm
               onCreateFolder={handleCreateFolder}
-              currentFolder={currentFolder || 'ROOT'}
+              currentFolderName={currentFolderName}
             />
             <FileTable
               fileList={fileList}
-              currentFolder={currentFolder || 'ROOT'}
+              currentFolder={currentFolderName}
+              onFolderClick={handleFolderClick}
             />
           </>
         )}

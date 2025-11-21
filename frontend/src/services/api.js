@@ -2,7 +2,7 @@ const API_BASE_URL = '/folders';
 
 export const fetchFolderContents = async (folderId) => {
   try {
-    const response = await fetch(`${API_BASE_URL}/${folderId}/`);
+    const response = await fetch(`${API_BASE_URL}/${folderId}`);
 
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
@@ -16,18 +16,18 @@ export const fetchFolderContents = async (folderId) => {
   }
 };
 
-export const createFolder = async (folderData) => {
+export const createFolder = async (parentId, folderName, userId) => {
   try {
-    const response = await fetch(`${API_BASE_URL}/`, {
-      method: 'PUT',
+    const response = await fetch(`${API_BASE_URL}`, {
+      method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        parent_name: folderData.parent_name,
-        name: folderData.name,
-        parent_folder: folderData.parent_folder,
-        path: folderData.path,
+        ParentId: parentId,
+        Name: folderName,
+        Type: 'FOLDER',
+        UserId: userId,
       }),
     });
 
