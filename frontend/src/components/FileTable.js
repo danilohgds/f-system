@@ -1,12 +1,37 @@
-import React from 'react';
+import React, { useState } from 'react';
 import './FileTable.css';
 
-const FileTable = ({ fileList, currentFolder, onFolderClick }) => {
+const FileTable = ({ fileList, currentFolder, onFolderClick, onFileClick, onRenameFolder }) => {
+  const [renamingItemId, setRenamingItemId] = useState(null);
+  const [newName, setNewName] = useState('');
+
   const handleItemClick = (item) => {
-    // Only navigate if it's a folder
     if (item.Type === 'FOLDER' && onFolderClick) {
       onFolderClick(item.ItemId, item.Name);
+    } else if (item.Type === 'FILE' && onFileClick) {
+      onFileClick(item.ItemId, item.Name);
     }
+  };
+
+  const handleRenameClick = (e, item) => {
+    e.stopPropagation();
+    setRenamingItemId(item.ItemId);
+    setNewName(item.Name);
+  };
+
+  const handleConfirmRename = async (e, item) => {
+    e.stopPropagation();
+    if (newName.trim() && onRenameFolder) {
+      await onRenameFolder(item.ParentId, item.Name, newName.trim());
+      setRenamingItemId(null);
+      setNewName('');
+    }
+  };
+
+  const handleCancelRename = (e) => {
+    e.stopPropagation();
+    setRenamingItemId(null);
+    setNewName('');
   };
 
   const getIcon = (type) => {
@@ -38,8 +63,52 @@ const FileTable = ({ fileList, currentFolder, onFolderClick }) => {
                 onClick={() => handleItemClick(item)}
               >
                 <td className="type-cell">{getIcon(item.Type)}</td>
-                <td className={item.Type === 'FOLDER' ? 'name-cell folder-name' : 'name-cell'}>
-                  {item.Name}
+                <td className={item.Type === 'FOLDER' ? 'name-cell folder-name' : 'name-cell file-name'}>
+                  {renamingItemId === item.ItemId ? (
+                    <div className="rename-container" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="text"
+                        className="rename-input"
+                        value={newName}
+                        onChange={(e) => setNewName(e.target.value)}
+                        autoFocus
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            handleConfirmRename(e, item);
+                          } else if (e.key === 'Escape') {
+                            handleCancelRename(e);
+                          }
+                        }}
+                      />
+                      <button
+                        className="rename-confirm-btn"
+                        onClick={(e) => handleConfirmRename(e, item)}
+                        title="Confirm"
+                      >
+                        ✓
+                      </button>
+                      <button
+                        className="rename-cancel-btn"
+                        onClick={(e) => handleCancelRename(e)}
+                        title="Cancel"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="name-content">
+                      <span>{item.Name}</span>
+                      {item.Type === 'FOLDER' && (
+                        <button
+                          className="rename-icon-btn"
+                          onClick={(e) => handleRenameClick(e, item)}
+                          title="Rename folder"
+                        >
+                          ✏️
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </td>
               </tr>
             ))

@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import FileTable from './components/FileTable';
 import CreateFolderForm from './components/CreateFolderForm';
-import { fetchFolderContents, createFolder } from './services/api';
+import CreateFileForm from './components/CreateFileForm';
+import DownloadModal from './components/DownloadModal';
+import { fetchFolderContents, createFolder, createFile, renameFolder } from './services/api';
 import './App.css';
 
 function App() {
@@ -12,6 +14,8 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [successMessage, setSuccessMessage] = useState(null);
+  const [showDownloadModal, setShowDownloadModal] = useState(false);
+  const [downloadFileName, setDownloadFileName] = useState('');
 
   // Root folder ID - TODO: Get from user auth
   const ROOT_FOLDER_ID = '9e105426-d861-4b5b-9f0d-ae5f30c41f33';
@@ -91,6 +95,64 @@ function App() {
     }
   };
 
+  const handleCreateFile = async (fileName) => {
+    try {
+      setError(null);
+      setSuccessMessage(null);
+
+      // Get current folder ID (use ROOT if not set)
+      const parentId = currentFolderId || ROOT_FOLDER_ID;
+
+      // Call API to create file
+      await createFile(parentId, fileName, USER_ID);
+
+      setSuccessMessage('File created successfully!');
+
+      // Refresh current folder contents
+      const contents = await fetchFolderContents(parentId);
+      setFileList(contents);
+
+      setTimeout(() => setSuccessMessage(null), 3000);
+    } catch (err) {
+      setError('Failed to create file. Please try again.');
+      console.error('Error creating file:', err);
+    }
+  };
+
+  const handleFileClick = (fileId, fileName) => {
+    setDownloadFileName(fileName);
+    setShowDownloadModal(true);
+    // Auto-close modal after 3 seconds
+    setTimeout(() => {
+      setShowDownloadModal(false);
+    }, 3000);
+  };
+
+  const handleCloseModal = () => {
+    setShowDownloadModal(false);
+  };
+
+  const handleRenameFolder = async (parentId, currentName, newName) => {
+    try {
+      setError(null);
+      setSuccessMessage(null);
+
+      // Call API to rename folder
+      await renameFolder(parentId, currentName, newName);
+
+      setSuccessMessage('Folder renamed successfully!');
+
+      // Refresh current folder contents
+      const contents = await fetchFolderContents(parentId);
+      setFileList(contents);
+
+      setTimeout(() => setSuccessMessage(null), 3000);
+    } catch (err) {
+      setError('Failed to rename folder. Please try again.');
+      console.error('Error renaming folder:', err);
+    }
+  };
+
   return (
     <div className="App">
       <header className="App-header">
@@ -143,18 +205,32 @@ function App() {
               </span>
             </div>
 
-            <CreateFolderForm
-              onCreateFolder={handleCreateFolder}
-              currentFolderName={currentFolderName}
-            />
+            <div className="create-actions-container">
+              <CreateFolderForm
+                onCreateFolder={handleCreateFolder}
+                currentFolderName={currentFolderName}
+              />
+              <CreateFileForm
+                onCreateFile={handleCreateFile}
+                currentFolderName={currentFolderName}
+              />
+            </div>
             <FileTable
               fileList={fileList}
               currentFolder={currentFolderName}
               onFolderClick={handleFolderClick}
+              onFileClick={handleFileClick}
+              onRenameFolder={handleRenameFolder}
             />
           </>
         )}
       </main>
+
+      <DownloadModal
+        isOpen={showDownloadModal}
+        fileName={downloadFileName}
+        onClose={handleCloseModal}
+      />
     </div>
   );
 }
