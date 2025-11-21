@@ -1,6 +1,22 @@
-from typing import List, Dict
+from typing import List, Dict, Any
 from fastapi import WebSocket
+from decimal import Decimal
 import json
+from logger_config import setup_logger
+
+logger = setup_logger("websocket")
+
+
+def convert_decimals(obj: Any) -> Any:
+    """Convert Decimal types to int or float for JSON serialization."""
+    if isinstance(obj, list):
+        return [convert_decimals(item) for item in obj]
+    elif isinstance(obj, dict):
+        return {key: convert_decimals(value) for key, value in obj.items()}
+    elif isinstance(obj, Decimal):
+        return int(obj) if obj % 1 == 0 else float(obj)
+    else:
+        return obj
 
 
 class ConnectionManager:
@@ -18,7 +34,7 @@ class ConnectionManager:
             'user_id': user_id,
             'current_path': None  # Will be set by client
         })
-        print(f"Client connected. Total connections: {len(self.active_connections)}")
+        logger.info(f"WebSocket connected for user '{user_id}' (total connections: {len(self.active_connections)})")
 
     def disconnect(self, websocket: WebSocket):
         """Remove a WebSocket connection"""
@@ -26,14 +42,14 @@ class ConnectionManager:
             conn for conn in self.active_connections
             if conn['websocket'] != websocket
         ]
-        print(f"Client disconnected. Total connections: {len(self.active_connections)}")
+        logger.info(f"WebSocket disconnected (total connections: {len(self.active_connections)})")
 
     def update_client_path(self, websocket: WebSocket, path: str):
         """Update the current path for a connected client"""
         for conn in self.active_connections:
             if conn['websocket'] == websocket:
                 conn['current_path'] = path
-                print(f"Client path updated to: {path}")
+                logger.info(f"Client subscribed to path: '{path}'")
                 break
 
     async def broadcast_event(self, event_type: str, path: str, data: dict, user_id: str):
@@ -46,31 +62,31 @@ class ConnectionManager:
             data: Additional event data (item details)
             user_id: User ID who triggered the event
         """
+        # Convert Decimals to JSON-serializable types
+        serializable_data = convert_decimals(data)
+
         message = {
             'type': event_type,
             'path': path,
-            'data': data,
+            'data': serializable_data,
             'user_id': user_id
         }
 
-        print(f"Broadcasting {event_type} event to path: '{path}' for user: {user_id}")
-        print(f"Active connections: {len(self.active_connections)}")
-
-        # Send to all clients viewing the same path for the same user
+        # Send to all clients for the same user
         sent_count = 0
         disconnected = []
         for conn in self.active_connections:
-            print(f"Checking connection - user_id: {conn['user_id']}, current_path: '{conn['current_path']}'")
-            if conn['user_id'] == user_id and conn['current_path'] == path:
+            if conn['user_id'] == user_id:
                 try:
                     await conn['websocket'].send_text(json.dumps(message))
                     sent_count += 1
-                    print(f"Sent message to client #{sent_count}")
                 except Exception as e:
-                    print(f"Error sending message to client: {e}")
+                    logger.error(f"Failed to send message to client: {e}")
                     disconnected.append(conn['websocket'])
 
-        print(f"Broadcast complete. Sent to {sent_count} client(s)")
+        if sent_count > 0:
+            item_name = data.get('Name', 'unknown')
+            logger.info(f"Broadcast {event_type} event for '{item_name}' at '{path}' to {sent_count} client(s)")
 
         # Clean up disconnected clients
         for ws in disconnected:
