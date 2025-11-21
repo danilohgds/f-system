@@ -161,26 +161,27 @@ class DynamoService:
 
     def update_item_name(self, parent_id: str, name: str, new_name: str) -> Optional[Dict]:
         """
-        Update the Name and Path fields of an item in DynamoDB.
-        Finds the item by ParentId and current Name, then updates to new Name.
+        Update the Name of an item by deleting and re-inserting with new Name.
+        Since Name is part of the key, we cannot update it directly in DynamoDB.
 
         Args:
-            parent_id: The ParentId of the item
-            name: The current name of the item
+            parent_id: The ParentId of the item (partition key)
+            name: The current name of the item (sort key)
             new_name: The new name for the item
 
         Returns:
             The updated item dictionary, or None if item not found
         """
         try:
-            # Find the item by ParentId and Name
-            items = self.list_folder_contents(parent_id)
-            item = None
-            for i in items:
-                if i.get('Name') == name:
-                    item = i
-                    break
+            # Get the existing item first
+            response = self.table.get_item(
+                Key={
+                    'ParentId': parent_id,
+                    'Name': name
+                }
+            )
 
+            item = response.get('Item')
             if not item:
                 return None
 
@@ -193,38 +194,42 @@ class DynamoService:
             parent_path = parent.get("Path", "")
             new_path = f"{parent_path}/{new_name}"
 
-            # Update the Name and Path fields
-            now = datetime.utcnow().isoformat()
-            response = self.table.update_item(
+            # Delete the old item
+            self.table.delete_item(
                 Key={
-                    'PK': item['PK'],
-                    'SK': item['SK']
-                },
-                UpdateExpression='SET #name = :name, #path = :path, #typename = :typename, UpdatedAt = :updated',
-                ExpressionAttributeNames={
-                    '#name': 'Name',
-                    '#path': 'Path',
-                    '#typename': 'TypeName'
-                },
-                ExpressionAttributeValues={
-                    ':name': new_name,
-                    ':path': new_path,
-                    ':typename': f"{item['Type']}#{new_name}",
-                    ':updated': now
-                },
-                ReturnValues='ALL_NEW'
+                    'ParentId': parent_id,
+                    'Name': name
+                }
             )
 
-            updated_item = response.get('Attributes', {})
+            # Create new item with updated Name and Path
+            now = datetime.utcnow().isoformat()
+            new_item = {
+                'PK': item['PK'],
+                'SK': item['SK'],
+                'ItemId': item['ItemId'],
+                'ParentId': parent_id,
+                'Name': new_name,  # Updated name
+                'Type': item['Type'],
+                'Path': new_path,  # Updated path
+                'Depth': item['Depth'],
+                'UserId': item['UserId'],
+                'TypeName': f"{item['Type']}#{new_name}",  # Updated TypeName
+                'CreatedAt': item.get('CreatedAt', now),
+                'UpdatedAt': now
+            }
+
+            # Insert the new item
+            self.table.put_item(Item=new_item)
 
             return {
-                'ParentId': updated_item.get('ParentId'),
-                'Name': updated_item.get('Name'),
-                'Depth': updated_item.get('Depth'),
-                'ItemId': updated_item.get('ItemId'),
-                'Path': updated_item.get('Path'),
-                'Type': updated_item.get('Type'),
-                'UserId': updated_item.get('UserId')
+                'ParentId': new_item['ParentId'],
+                'Name': new_item['Name'],
+                'Depth': new_item['Depth'],
+                'ItemId': new_item['ItemId'],
+                'Path': new_item['Path'],
+                'Type': new_item['Type'],
+                'UserId': new_item['UserId']
             }
 
         except ClientError as e:
