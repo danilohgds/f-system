@@ -1,15 +1,29 @@
-from fastapi import FastAPI, status, HTTPException, Request
+from fastapi import FastAPI, status, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List, Any
 import uvicorn
 import uuid
 import traceback
+import json
 from decimal import Decimal
 from dynamo_service import get_dynamo_service
+from websocket_manager import get_websocket_manager
 
 app = FastAPI(title="File System Management API", version="1.0.0", debug=True)
+
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 dynamo_service = get_dynamo_service()
+ws_manager = get_websocket_manager()
 
 
 def convert_decimals(obj: Any) -> Any:
@@ -75,9 +89,37 @@ def read_root():
             "POST /folders": "Create a new item in a folder",
             "DELETE /item/{item_id}": "Delete a file by ID using ItemIdIndex",
             "DELETE /folders/{folder_id}?user_id={user_id}": "Delete a folder and all its contents using GSIPATH",
-            "DELETE /folders": "Delete all items matching a path (requires UserId and Path in request body)"
+            "DELETE /folders": "Delete all items matching a path (requires UserId and Path in request body)",
+            "WS /ws/{user_id}": "WebSocket endpoint for real-time updates"
         }
     }
+
+
+@app.websocket("/ws/{user_id}")
+async def websocket_endpoint(websocket: WebSocket, user_id: str):
+    """
+    WebSocket endpoint for real-time updates across tabs.
+
+    Clients should send messages with format:
+    {"type": "subscribe", "path": "/folder/path"}
+
+    Server will broadcast events:
+    {"type": "ADDED|DELETED|RENAMED", "path": "/folder/path", "data": {...}}
+    """
+    await ws_manager.connect(websocket, user_id)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            message = json.loads(data)
+
+            # Handle client messages (e.g., path updates)
+            if message.get('type') == 'subscribe':
+                path = message.get('path')
+                ws_manager.update_client_path(websocket, path)
+
+    except WebSocketDisconnect:
+        ws_manager.disconnect(websocket)
+        print(f"WebSocket disconnected for user: {user_id}")
 
 
 @app.post("/users/{user_id}", response_model=FileSystemItemResponse)
@@ -127,7 +169,7 @@ def get_folder_contents(folder_id: str):
 
 
 @app.patch("/folders/{parent_id}/{name}", response_model=FileSystemItemResponse)
-def rename_folder(parent_id: str, name: str, request: RenameItemRequest):
+async def rename_folder(parent_id: str, name: str, request: RenameItemRequest):
     """
     Rename a folder by updating its Name field in DynamoDB.
 
@@ -139,6 +181,10 @@ def rename_folder(parent_id: str, name: str, request: RenameItemRequest):
     Returns:
         The updated folder information
     """
+    # Get parent path for WebSocket event
+    parent = dynamo_service.get_item_by_id(parent_id)
+    parent_path = parent.get('Path', '') if parent else ''
+
     updated_item = dynamo_service.update_item_name(parent_id, name, request.Name)
 
     if not updated_item:
@@ -147,6 +193,18 @@ def rename_folder(parent_id: str, name: str, request: RenameItemRequest):
             detail=f"Folder with parent '{parent_id}' and name '{name}' not found"
         )
 
+    # Broadcast RENAMED event to other tabs viewing the same folder
+    await ws_manager.broadcast_event(
+        event_type='RENAMED',
+        path=parent_path,
+        data={
+            'oldName': name,
+            'newName': request.Name,
+            'item': updated_item
+        },
+        user_id=updated_item.get('UserId')
+    )
+
     return JSONResponse(
         status_code=status.HTTP_200_OK,
         content=convert_decimals(updated_item)
@@ -154,7 +212,7 @@ def rename_folder(parent_id: str, name: str, request: RenameItemRequest):
 
 
 @app.post("/folders", response_model=FileSystemItemResponse)
-def create_item_in_folder(item: FileSystemItem):
+async def create_item_in_folder(item: FileSystemItem):
     """
     Create a new item (folder or file) in a folder.
 
@@ -194,6 +252,15 @@ def create_item_in_folder(item: FileSystemItem):
         item_id=item_id
     )
 
+    # Broadcast ADDED event to all clients viewing the parent folder
+    print(f"[CREATE ITEM] Broadcasting ADDED event - parent_path: '{parent_path}', item: {created_item}")
+    await ws_manager.broadcast_event(
+        event_type='ADDED',
+        path=parent_path,
+        data=created_item,
+        user_id=item.UserId
+    )
+
     return JSONResponse(
         status_code=status.HTTP_201_CREATED,
         content=convert_decimals(created_item)
@@ -201,12 +268,22 @@ def create_item_in_folder(item: FileSystemItem):
 
 
 @app.delete("/item/{item_id}")
-def delete_item(item_id: str):
+async def delete_item(item_id: str):
     """
     Delete a file by its ID using ItemIdIndex GSI.
 
     Removes the item from DynamoDB.
     """
+    # Get item info before deleting for WebSocket event
+    item = dynamo_service.get_item_by_id(item_id)
+    if not item:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Item '{item_id}' not found"
+        )
+
+    parent_path = dynamo_service.get_item_by_id(item['ParentId']).get('Path', '') if item.get('ParentId') else ''
+
     success = dynamo_service.delete_item(item_id)
 
     if not success:
@@ -214,6 +291,14 @@ def delete_item(item_id: str):
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Item '{item_id}' not found"
         )
+
+    # Broadcast DELETED event to other tabs viewing the same folder
+    await ws_manager.broadcast_event(
+        event_type='DELETED',
+        path=parent_path,
+        data={'ItemId': item_id, 'Name': item.get('Name'), 'Type': item.get('Type')},
+        user_id=item.get('UserId')
+    )
 
     return JSONResponse(
         status_code=status.HTTP_200_OK,
@@ -225,7 +310,7 @@ def delete_item(item_id: str):
 
 
 @app.delete("/folders/{folder_id}")
-def delete_folder(folder_id: str, user_id: str):
+async def delete_folder(folder_id: str, user_id: str):
     """
     Delete a folder and all its contents using GSIPATH index.
 
@@ -236,6 +321,16 @@ def delete_folder(folder_id: str, user_id: str):
     Returns:
         Dictionary containing deletion results including counts
     """
+    # Get folder info before deleting for WebSocket event
+    folder = dynamo_service.get_item_by_id(folder_id)
+    if not folder:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Folder '{folder_id}' not found"
+        )
+
+    parent_path = dynamo_service.get_item_by_id(folder['ParentId']).get('Path', '') if folder.get('ParentId') else ''
+
     result = dynamo_service.delete_folder_with_contents(folder_id, user_id)
 
     if not result.get('success', False):
@@ -243,6 +338,14 @@ def delete_folder(folder_id: str, user_id: str):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete folder: {result.get('error', 'Unknown error')}"
         )
+
+    # Broadcast DELETED event to other tabs viewing the same folder
+    await ws_manager.broadcast_event(
+        event_type='DELETED',
+        path=parent_path,
+        data={'ItemId': folder_id, 'Name': folder.get('Name'), 'Type': 'FOLDER', 'deleted_count': result.get('deleted_count')},
+        user_id=user_id
+    )
 
     return JSONResponse(
         status_code=status.HTTP_200_OK,

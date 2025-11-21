@@ -1,15 +1,17 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import FileTable from './components/FileTable';
 import CreateFolderForm from './components/CreateFolderForm';
 import CreateFileForm from './components/CreateFileForm';
 import DownloadModal from './components/DownloadModal';
 import { fetchFolderContents, createFolder, createFile, renameFolder, deleteFile, deleteFolder } from './services/api';
+import wsService from './services/websocket';
 import './App.css';
 
 function App() {
   const [fileList, setFileList] = useState([]);
   const [currentFolderId, setCurrentFolderId] = useState(null);
   const [currentFolderName, setCurrentFolderName] = useState('ROOT');
+  const [currentFolderPath, setCurrentFolderPath] = useState(''); // Track current folder's path
   const [navigationStack, setNavigationStack] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -23,6 +25,66 @@ function App() {
   // Hardcoded User ID - TODO: Get from user auth
   const USER_ID = 'userDanilo';
 
+  // WebSocket event handlers
+  const handleAddedEvent = useCallback((message) => {
+    console.log('========== ADDED EVENT RECEIVED ==========');
+    console.log('Full message:', JSON.stringify(message, null, 2));
+    console.log('Event path:', message.path);
+    console.log('Current folder path:', currentFolderPath);
+    console.log('Paths match:', message.path === currentFolderPath);
+    const newItem = message.data;
+    setFileList(prevList => {
+      // Check if item already exists
+      const exists = prevList.some(item => item.ItemId === newItem.ItemId);
+      if (!exists) {
+        console.log('✓ Adding new item to list:', newItem);
+        return [...prevList, newItem];
+      }
+      console.log('✗ Item already exists, skipping');
+      return prevList;
+    });
+  }, [currentFolderPath]);
+
+  const handleDeletedEvent = useCallback((message) => {
+    console.log('DELETED event received:', message);
+    const deletedItemId = message.data.ItemId;
+    setFileList(prevList => prevList.filter(item => item.ItemId !== deletedItemId));
+  }, []);
+
+  const handleRenamedEvent = useCallback((message) => {
+    console.log('RENAMED event received:', message);
+    const updatedItem = message.data.item;
+    setFileList(prevList => prevList.map(item =>
+      item.ItemId === updatedItem.ItemId ? updatedItem : item
+    ));
+  }, []);
+
+  // Initialize WebSocket connection
+  useEffect(() => {
+    wsService.connect(USER_ID);
+
+    // Register event handlers
+    wsService.on('ADDED', handleAddedEvent);
+    wsService.on('DELETED', handleDeletedEvent);
+    wsService.on('RENAMED', handleRenamedEvent);
+
+    // Cleanup on unmount
+    return () => {
+      wsService.off('ADDED', handleAddedEvent);
+      wsService.off('DELETED', handleDeletedEvent);
+      wsService.off('RENAMED', handleRenamedEvent);
+    };
+  }, [USER_ID, handleAddedEvent, handleDeletedEvent, handleRenamedEvent]);
+
+  // Subscribe to path changes
+  useEffect(() => {
+    console.log('========== PATH SUBSCRIPTION ==========');
+    console.log('Subscribing to path:', JSON.stringify(currentFolderPath));
+    console.log('Path length:', currentFolderPath.length);
+    console.log('Path is empty string:', currentFolderPath === '');
+    wsService.subscribePath(currentFolderPath);
+  }, [currentFolderPath]);
+
   useEffect(() => {
     const loadInitialFolder = async () => {
       try {
@@ -33,6 +95,22 @@ function App() {
         const contents = await fetchFolderContents(folderId);
 
         setFileList(contents);
+
+        // Compute current folder path from navigation stack
+        if (navigationStack.length === 0 && currentFolderName === 'ROOT') {
+          setCurrentFolderPath(''); // Root folder
+        } else {
+          // Build path: /folder1/folder2/currentFolder (excluding ROOT)
+          const pathParts = navigationStack
+            .filter(f => f.name !== 'ROOT')  // Filter out ROOT from path
+            .map(f => f.name);
+          if (currentFolderName !== 'ROOT') {
+            pathParts.push(currentFolderName);
+          }
+          const path = '/' + pathParts.join('/');
+          setCurrentFolderPath(path);
+          console.log('Current folder path set to:', path); // Debug log
+        }
       } catch (err) {
         setError('Failed to load folder contents. Please try again.');
         console.error('Error loading folder:', err);
@@ -42,7 +120,7 @@ function App() {
     };
 
     loadInitialFolder();
-  }, [currentFolderId]);
+  }, [currentFolderId, navigationStack, currentFolderName]);
 
   const handleFolderClick = (folderId, folderName) => {
     // Add current folder to navigation stack
