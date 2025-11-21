@@ -136,6 +136,13 @@ def create_item_in_folder(item: FileSystemItem):
 
     depth = parent_depth + 1 if item.Type == "FOLDER" else parent_depth
 
+    # Prevent creating items if depth exceeds 5
+    if depth > 5:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot create item: maximum depth of 5 exceeded (attempted depth: {depth})"
+        )
+
     path = f"{parent_path}/{item.Name}"
 
     created_item = dynamo_service.create_item(
