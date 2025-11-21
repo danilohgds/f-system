@@ -1,21 +1,45 @@
-from fastapi import FastAPI, status, HTTPException
+from fastapi import FastAPI, status, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Any, Dict
 import uvicorn
 import uuid
+import traceback
+from decimal import Decimal
 from dynamo_service import get_dynamo_service
 
-app = FastAPI(title="File System Management API", version="1.0.0")
+app = FastAPI(title="File System Management API", version="1.0.0", debug=True)
 dynamo_service = get_dynamo_service()
+
+
+def convert_decimals(obj: Any) -> Any:
+    """Convert Decimal types to int or float for JSON serialization."""
+    if isinstance(obj, list):
+        return [convert_decimals(item) for item in obj]
+    elif isinstance(obj, dict):
+        return {key: convert_decimals(value) for key, value in obj.items()}
+    elif isinstance(obj, Decimal):
+        return int(obj) if obj % 1 == 0 else float(obj)
+    else:
+        return obj
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Global exception handler to show stack traces."""
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={
+            "detail": str(exc),
+            "traceback": traceback.format_exc()
+        }
+    )
 
 
 class FileSystemItem(BaseModel):
     ParentId: str
     Name: str
-    Depth: int
     ItemId: Optional[str] = None
-    Path: str
     Type: str
     UserId: str
 
@@ -55,19 +79,12 @@ def initialize_user_filesystem(user_id: str):
     Returns:
         The created ROOT folder information
     """
-    try:
-        root_folder = dynamo_service.initialize_user_root(user_id)
+    root_folder = dynamo_service.initialize_user_root(user_id)
 
-        return JSONResponse(
-            status_code=status.HTTP_201_CREATED,
-            content=root_folder
-        )
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to initialize user filesystem: {str(e)}"
-        )
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED,
+        content=convert_decimals(root_folder)
+    )
 
 
 @app.get("/folder/{folder_id}", response_model=List[FileSystemItemResponse])
@@ -77,32 +94,24 @@ def get_folder_contents(folder_id: str):
 
     Returns all items (folders and files) within the specified folder.
     """
-    try:
-        items = dynamo_service.list_folder_contents(folder_id)
+    items = dynamo_service.list_folder_contents(folder_id)
 
-        # Convert DynamoDB items to response format
-        response_items = []
-        for item in items:
-            response_items.append({
-                "ParentId": item.get("ParentId"),
-                "Name": item.get("Name"),
-                "Depth": item.get("Depth"),
-                "ItemId": item.get("ItemId"),
-                "Path": item.get("Path"),
-                "Type": item.get("Type"),
-                "UserId": item.get("UserId")
-            })
+    response_items = []
+    for item in items:
+        response_items.append({
+            "ParentId": item.get("ParentId"),
+            "Name": item.get("Name"),
+            "Depth": item.get("Depth"),
+            "ItemId": item.get("ItemId"),
+            "Path": item.get("Path"),
+            "Type": item.get("Type"),
+            "UserId": item.get("UserId")
+        })
 
-        return JSONResponse(
-            status_code=status.HTTP_200_OK,
-            content=response_items
-        )
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to list folder contents: {str(e)}"
-        )
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content=convert_decimals(response_items)
+    )
 
 
 @app.post("/folders", response_model=FileSystemItemResponse)
@@ -113,31 +122,36 @@ def create_item_in_folder(item: FileSystemItem):
     If ItemId is None, a new UUID will be generated automatically.
     The item is persisted to DynamoDB with hierarchical path structure.
     """
-    try:
-        # Generate UUID if ItemId is not provided
-        item_id = item.ItemId if item.ItemId else str(uuid.uuid4())
+    item_id = item.ItemId if item.ItemId else str(uuid.uuid4())
 
-        # Create item in DynamoDB
-        created_item = dynamo_service.create_item(
-            parent_id=item.ParentId,
-            name=item.Name,
-            depth=item.Depth,
-            path=item.Path,
-            item_type=item.Type,
-            user_id=item.UserId,
-            item_id=item_id
-        )
-
-        return JSONResponse(
-            status_code=status.HTTP_201_CREATED,
-            content=created_item
-        )
-
-    except Exception as e:
+    parent = dynamo_service.get_item_by_id(item.ParentId)
+    if not parent:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create item: {str(e)}"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Parent folder with ID '{item.ParentId}' not found"
         )
+
+    parent_path = parent.get("Path", "")
+    parent_depth = parent.get("Depth", 0)
+
+    depth = parent_depth + 1 if item.Type == "FOLDER" else parent_depth
+
+    path = f"{parent_path}/{item.Name}"
+
+    created_item = dynamo_service.create_item(
+        parent_id=item.ParentId,
+        name=item.Name,
+        depth=depth,
+        path=path,
+        item_type=item.Type,
+        user_id=item.UserId,
+        item_id=item_id
+    )
+
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED,
+        content=convert_decimals(created_item)
+    )
 
 
 @app.delete("/item/{item_id}")
@@ -147,30 +161,21 @@ def delete_item(item_id: str, user_id: str):
 
     Removes the item from DynamoDB.
     """
-    try:
-        success = dynamo_service.delete_item(item_id, user_id)
+    success = dynamo_service.delete_item(item_id, user_id)
 
-        if not success:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Item '{item_id}' not found"
-            )
-
-        return JSONResponse(
-            status_code=status.HTTP_200_OK,
-            content={
-                "message": "Item deleted successfully",
-                "item_id": item_id
-            }
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
+    if not success:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to delete item: {str(e)}"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Item '{item_id}' not found"
         )
+
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={
+            "message": "Item deleted successfully",
+            "item_id": item_id
+        }
+    )
 
 
 if __name__ == "__main__":
