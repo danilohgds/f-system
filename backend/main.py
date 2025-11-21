@@ -59,6 +59,10 @@ class DeleteByPathRequest(BaseModel):
     Path: str
 
 
+class RenameItemRequest(BaseModel):
+    Name: str
+
+
 @app.get("/")
 def read_root():
     return {
@@ -67,6 +71,7 @@ def read_root():
         "endpoints": {
             "POST /users/{user_id}": "Initialize filesystem for a user",
             "GET /folders/{folder_id}": "List contents of a folder",
+            "PATCH /folders/{parent_id}/{name}": "Rename a folder (body: { Name: new_name })",
             "POST /folders": "Create a new item in a folder",
             "DELETE /item/{item_id}": "Delete an item by ID",
             "DELETE /folders": "Delete all items matching a path (requires UserId and Path in request body)"
@@ -117,6 +122,33 @@ def get_folder_contents(folder_id: str):
     return JSONResponse(
         status_code=status.HTTP_200_OK,
         content=convert_decimals(response_items)
+    )
+
+
+@app.patch("/folders/{parent_id}/{name}", response_model=FileSystemItemResponse)
+def rename_folder(parent_id: str, name: str, request: RenameItemRequest):
+    """
+    Rename a folder by updating its Name field in DynamoDB.
+
+    Args:
+        parent_id: The ParentId of the folder
+        name: The current name of the folder
+        request: Request body containing the new Name
+
+    Returns:
+        The updated folder information
+    """
+    updated_item = dynamo_service.update_item_name(parent_id, name, request.Name)
+
+    if not updated_item:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Folder with parent '{parent_id}' and name '{name}' not found"
+        )
+
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content=convert_decimals(updated_item)
     )
 
 

@@ -159,6 +159,78 @@ class DynamoService:
             print(f"Error deleting item: {e}")
             return False
 
+    def update_item_name(self, parent_id: str, name: str, new_name: str) -> Optional[Dict]:
+        """
+        Update the Name and Path fields of an item in DynamoDB.
+        Finds the item by ParentId and current Name, then updates to new Name.
+
+        Args:
+            parent_id: The ParentId of the item
+            name: The current name of the item
+            new_name: The new name for the item
+
+        Returns:
+            The updated item dictionary, or None if item not found
+        """
+        try:
+            # Find the item by ParentId and Name
+            items = self.list_folder_contents(parent_id)
+            item = None
+            for i in items:
+                if i.get('Name') == name:
+                    item = i
+                    break
+
+            if not item:
+                return None
+
+            # Get parent to construct new path
+            parent = self.get_item_by_id(parent_id)
+            if not parent:
+                return None
+
+            # Construct new path: parent_path/new_name
+            parent_path = parent.get("Path", "")
+            new_path = f"{parent_path}/{new_name}"
+
+            # Update the Name and Path fields
+            now = datetime.utcnow().isoformat()
+            response = self.table.update_item(
+                Key={
+                    'PK': item['PK'],
+                    'SK': item['SK']
+                },
+                UpdateExpression='SET #name = :name, #path = :path, #typename = :typename, UpdatedAt = :updated',
+                ExpressionAttributeNames={
+                    '#name': 'Name',
+                    '#path': 'Path',
+                    '#typename': 'TypeName'
+                },
+                ExpressionAttributeValues={
+                    ':name': new_name,
+                    ':path': new_path,
+                    ':typename': f"{item['Type']}#{new_name}",
+                    ':updated': now
+                },
+                ReturnValues='ALL_NEW'
+            )
+
+            updated_item = response.get('Attributes', {})
+
+            return {
+                'ParentId': updated_item.get('ParentId'),
+                'Name': updated_item.get('Name'),
+                'Depth': updated_item.get('Depth'),
+                'ItemId': updated_item.get('ItemId'),
+                'Path': updated_item.get('Path'),
+                'Type': updated_item.get('Type'),
+                'UserId': updated_item.get('UserId')
+            }
+
+        except ClientError as e:
+            print(f"Error updating item name: {e}")
+            return None
+
     def delete_all_in_path(self, user_id: str, path: str) -> Dict:
         """
         Delete all items matching a specific UserId and Path prefix using GSIPATH index.
