@@ -93,3 +93,39 @@ export const renameFolder = async (parentId, currentName, newName) => {
     throw error;
   }
 };
+
+export const deleteFile = async (itemId) => {
+  try {
+    const response = await fetch(`/item/${encodeURIComponent(itemId)}`, {
+      method: 'DELETE',
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error deleting file:', error);
+    throw error;
+  }
+};
+
+export const deleteFolder = async (folderId, userId) => {
+  try {
+    const response = await fetch(`/folders/${encodeURIComponent(folderId)}?user_id=${encodeURIComponent(userId)}`, {
+      method: 'DELETE',
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error deleting folder:', error);
+    throw error;
+  }
+};

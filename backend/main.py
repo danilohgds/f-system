@@ -73,7 +73,8 @@ def read_root():
             "GET /folders/{folder_id}": "List contents of a folder",
             "PATCH /folders/{parent_id}/{name}": "Rename a folder (body: { Name: new_name })",
             "POST /folders": "Create a new item in a folder",
-            "DELETE /item/{item_id}": "Delete an item by ID",
+            "DELETE /item/{item_id}": "Delete a file by ID using ItemIdIndex",
+            "DELETE /folders/{folder_id}?user_id={user_id}": "Delete a folder and all its contents using GSIPATH",
             "DELETE /folders": "Delete all items matching a path (requires UserId and Path in request body)"
         }
     }
@@ -200,13 +201,13 @@ def create_item_in_folder(item: FileSystemItem):
 
 
 @app.delete("/item/{item_id}")
-def delete_item(item_id: str, user_id: str):
+def delete_item(item_id: str):
     """
-    Delete an item by its ID.
+    Delete a file by its ID using ItemIdIndex GSI.
 
     Removes the item from DynamoDB.
     """
-    success = dynamo_service.delete_item(item_id, user_id)
+    success = dynamo_service.delete_item(item_id)
 
     if not success:
         raise HTTPException(
@@ -220,6 +221,32 @@ def delete_item(item_id: str, user_id: str):
             "message": "Item deleted successfully",
             "item_id": item_id
         }
+    )
+
+
+@app.delete("/folders/{folder_id}")
+def delete_folder(folder_id: str, user_id: str):
+    """
+    Delete a folder and all its contents using GSIPATH index.
+
+    Args:
+        folder_id: The ItemId of the folder to delete
+        user_id: Query parameter for the user ID
+
+    Returns:
+        Dictionary containing deletion results including counts
+    """
+    result = dynamo_service.delete_folder_with_contents(folder_id, user_id)
+
+    if not result.get('success', False):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete folder: {result.get('error', 'Unknown error')}"
+        )
+
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content=convert_decimals(result)
     )
 
 

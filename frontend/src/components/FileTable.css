@@ -130,6 +130,27 @@
   background-color: rgba(0, 0, 0, 0.05);
 }
 
+/* Delete icon button */
+.delete-icon-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 4px 8px;
+  opacity: 0;
+  transition: opacity 0.2s, background-color 0.2s;
+  border-radius: 4px;
+}
+
+.folder-row:hover .delete-icon-btn,
+.file-row:hover .delete-icon-btn {
+  opacity: 1;
+}
+
+.delete-icon-btn:hover {
+  background-color: rgba(244, 67, 54, 0.1);
+}
+
 /* Rename container */
 .rename-container {
   display: flex;

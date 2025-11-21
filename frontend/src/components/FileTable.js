@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import './FileTable.css';
 
-const FileTable = ({ fileList, currentFolder, onFolderClick, onFileClick, onRenameFolder }) => {
+const FileTable = ({ fileList, currentFolder, onFolderClick, onFileClick, onRenameFolder, onDeleteItem }) => {
   const [renamingItemId, setRenamingItemId] = useState(null);
   const [newName, setNewName] = useState('');
 
@@ -32,6 +32,20 @@ const FileTable = ({ fileList, currentFolder, onFolderClick, onFileClick, onRena
     e.stopPropagation();
     setRenamingItemId(null);
     setNewName('');
+  };
+
+  const handleDeleteClick = (e, item) => {
+    e.stopPropagation();
+    const itemTypeText = item.Type === 'FOLDER' ? 'folder' : 'file';
+    const warningMessage = item.Type === 'FOLDER'
+      ? `Are you sure you want to delete the folder "${item.Name}" and all its contents?`
+      : `Are you sure you want to delete the file "${item.Name}"?`;
+
+    if (window.confirm(warningMessage)) {
+      if (onDeleteItem) {
+        onDeleteItem(item.ItemId, item.Name, item.Type);
+      }
+    }
   };
 
   const getIcon = (type) => {
@@ -107,6 +121,13 @@ const FileTable = ({ fileList, currentFolder, onFolderClick, onFileClick, onRena
                           ✏️
                         </button>
                       )}
+                      <button
+                        className="delete-icon-btn"
+                        onClick={(e) => handleDeleteClick(e, item)}
+                        title={`Delete ${item.Type === 'FOLDER' ? 'folder' : 'file'}`}
+                      >
+                        🗑️
+                      </button>
                     </div>
                   )}
                 </td>

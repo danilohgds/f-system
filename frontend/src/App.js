@@ -3,7 +3,7 @@ import FileTable from './components/FileTable';
 import CreateFolderForm from './components/CreateFolderForm';
 import CreateFileForm from './components/CreateFileForm';
 import DownloadModal from './components/DownloadModal';
-import { fetchFolderContents, createFolder, createFile, renameFolder } from './services/api';
+import { fetchFolderContents, createFolder, createFile, renameFolder, deleteFile, deleteFolder } from './services/api';
 import './App.css';
 
 function App() {
@@ -153,6 +153,33 @@ function App() {
     }
   };
 
+  const handleDeleteItem = async (itemId, itemName, itemType) => {
+    try {
+      setError(null);
+      setSuccessMessage(null);
+
+      // Call appropriate API based on item type
+      if (itemType === 'FOLDER') {
+        const result = await deleteFolder(itemId, USER_ID);
+        const deletedCount = result.deleted_count || 1;
+        setSuccessMessage(`Folder "${itemName}" and ${deletedCount} item(s) deleted successfully!`);
+      } else {
+        await deleteFile(itemId);
+        setSuccessMessage(`File "${itemName}" deleted successfully!`);
+      }
+
+      // Refresh current folder contents
+      const folderId = currentFolderId || ROOT_FOLDER_ID;
+      const contents = await fetchFolderContents(folderId);
+      setFileList(contents);
+
+      setTimeout(() => setSuccessMessage(null), 3000);
+    } catch (err) {
+      setError('Failed to delete item. Please try again.');
+      console.error('Error deleting item:', err);
+    }
+  };
+
   return (
     <div className="App">
       <header className="App-header">
@@ -221,6 +248,7 @@ function App() {
               onFolderClick={handleFolderClick}
               onFileClick={handleFileClick}
               onRenameFolder={handleRenameFolder}
+              onDeleteItem={handleDeleteItem}
             />
           </>
         )}

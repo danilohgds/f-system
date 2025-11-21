@@ -138,19 +138,27 @@ class DynamoService:
             print(f"Error listing folder contents: {e}")
             return []
 
-    def delete_item(self, item_id: str, user_id: str) -> bool:
-        """Delete an item by ID"""
+    def delete_item(self, item_id: str) -> bool:
+        """
+        Delete an item by ID using ItemIdIndex GSI.
+
+        Args:
+            item_id: The ItemId of the item to delete
+
+        Returns:
+            True if deleted successfully, False otherwise
+        """
         try:
-            # Get the item first to find its PK and SK
+            # Get the item first using ItemIdIndex GSI
             item = self.get_item_by_id(item_id)
             if not item:
                 return False
 
-            # Delete the item
+            # Delete the item using ParentId and Name as keys
             self.table.delete_item(
                 Key={
-                    'PK': user_id,
-                    'SK': item['SK']
+                    'ParentId': item['ParentId'],
+                    'Name': item['Name']
                 }
             )
             return True
@@ -162,6 +170,7 @@ class DynamoService:
     def update_item_name(self, parent_id: str, name: str, new_name: str) -> Optional[Dict]:
         """
         Update the Name of an item by deleting and re-inserting with new Name.
+        If the item is a folder, also updates the Path for all descendant items.
         Since Name is part of the key, we cannot update it directly in DynamoDB.
 
         Args:
@@ -190,9 +199,56 @@ class DynamoService:
             if not parent:
                 return None
 
-            # Construct new path: parent_path/new_name
+            # Get old and new paths
             parent_path = parent.get("Path", "")
+            old_path = item.get('Path')
             new_path = f"{parent_path}/{new_name}"
+
+            # If this is a folder, update all descendant items' paths
+            if item['Type'] == 'FOLDER':
+                user_id = item['UserId']
+
+                # Query all items with paths that begin with the old folder path
+                items_to_update = []
+                query_response = self.table.query(
+                    IndexName='GSIPATH',
+                    KeyConditionExpression=Key('UserId').eq(user_id) & Key('Path').begins_with(old_path + '/')
+                )
+                items_to_update.extend(query_response.get('Items', []))
+
+                # Handle pagination
+                while 'LastEvaluatedKey' in query_response:
+                    query_response = self.table.query(
+                        IndexName='GSIPATH',
+                        KeyConditionExpression=Key('UserId').eq(user_id) & Key('Path').begins_with(old_path + '/'),
+                        ExclusiveStartKey=query_response['LastEvaluatedKey']
+                    )
+                    items_to_update.extend(query_response.get('Items', []))
+
+                # Update each descendant item's path
+                now = datetime.utcnow().isoformat()
+                for descendant in items_to_update:
+                    descendant_old_path = descendant['Path']
+                    # Replace the old folder path prefix with the new one
+                    descendant_new_path = descendant_old_path.replace(old_path, new_path, 1)
+
+                    try:
+                        self.table.update_item(
+                            Key={
+                                'ParentId': descendant['ParentId'],
+                                'Name': descendant['Name']
+                            },
+                            UpdateExpression='SET #path = :new_path, UpdatedAt = :updated',
+                            ExpressionAttributeNames={
+                                '#path': 'Path'
+                            },
+                            ExpressionAttributeValues={
+                                ':new_path': descendant_new_path,
+                                ':updated': now
+                            }
+                        )
+                    except ClientError as e:
+                        print(f"Error updating descendant path for {descendant['Name']}: {e}")
 
             # Delete the old item
             self.table.delete_item(
@@ -235,6 +291,101 @@ class DynamoService:
         except ClientError as e:
             print(f"Error updating item name: {e}")
             return None
+
+    def delete_folder_with_contents(self, folder_id: str, user_id: str) -> Dict:
+        """
+        Delete a folder and all its contents (descendants) using GSIPATH index.
+
+        Args:
+            folder_id: The ItemId of the folder to delete
+            user_id: User ID
+
+        Returns:
+            Dictionary with deletion results
+        """
+        try:
+            # Get the folder first using ItemIdIndex
+            folder = self.get_item_by_id(folder_id)
+            if not folder:
+                return {
+                    'success': False,
+                    'deleted_count': 0,
+                    'error': 'Folder not found'
+                }
+
+            # Verify it's a folder
+            if folder.get('Type') != 'FOLDER':
+                return {
+                    'success': False,
+                    'deleted_count': 0,
+                    'error': 'Item is not a folder'
+                }
+
+            folder_path = folder.get('Path')
+
+            # Query all items with paths that begin with the folder path
+            items_to_delete = []
+            response = self.table.query(
+                IndexName='GSIPATH',
+                KeyConditionExpression=Key('UserId').eq(user_id) & Key('Path').begins_with(folder_path + '/')
+            )
+            items_to_delete.extend(response.get('Items', []))
+
+            # Handle pagination
+            while 'LastEvaluatedKey' in response:
+                response = self.table.query(
+                    IndexName='GSIPATH',
+                    KeyConditionExpression=Key('UserId').eq(user_id) & Key('Path').begins_with(folder_path + '/'),
+                    ExclusiveStartKey=response['LastEvaluatedKey']
+                )
+                items_to_delete.extend(response.get('Items', []))
+
+            # Batch delete all descendants (25 items at a time)
+            deleted_count = 0
+            failed_count = 0
+
+            for i in range(0, len(items_to_delete), 25):
+                batch = items_to_delete[i:i+25]
+
+                try:
+                    with self.table.batch_writer() as writer:
+                        for item in batch:
+                            writer.delete_item(
+                                Key={'ParentId': item['ParentId'], 'Name': item['Name']}
+                            )
+                            deleted_count += 1
+                except ClientError as e:
+                    print(f"Error in batch delete: {e}")
+                    failed_count += len(batch)
+
+            # Finally, delete the folder itself
+            try:
+                self.table.delete_item(
+                    Key={
+                        'ParentId': folder['ParentId'],
+                        'Name': folder['Name']
+                    }
+                )
+                deleted_count += 1
+            except ClientError as e:
+                print(f"Error deleting folder: {e}")
+                failed_count += 1
+
+            return {
+                'success': True,
+                'deleted_count': deleted_count,
+                'failed_count': failed_count,
+                'total_found': len(items_to_delete) + 1  # +1 for the folder itself
+            }
+
+        except ClientError as e:
+            print(f"Error deleting folder with contents: {e}")
+            return {
+                'success': False,
+                'deleted_count': 0,
+                'failed_count': 0,
+                'error': str(e)
+            }
 
     def delete_all_in_path(self, user_id: str, path: str) -> Dict:
         """
